@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Trade Book</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  html, body { margin: 0; background: #0d1018; }
+  * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
+  input:focus, select:focus, textarea:focus { border-color: #2f6df0 !important; }
+  input::placeholder, textarea::placeholder { color: #4a5266; }
+  button:active { transform: scale(0.97); }
+  @media (max-width: 520px) {
+    .summary-grid { grid-template-columns: repeat(2, 1fr) !important; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useMemo } = React;
+
+const KEY = "tradebook:all";
+
+function loadTrades() {
+  try {
+    const raw = localStorage.getItem(KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+function saveTrades(t) {
+  try { localStorage.setItem(KEY, JSON.stringify(t)); } catch (e) { console.error(e); }
+}
+
+const TRADE_TYPES = ["Scalp", "Overnight swing", "Gap-up", "Day trade", "Position", "Other"];
+const TYPE_COLOR = {
+  "Scalp": "#5ec8a8", "Overnight swing": "#e0a458", "Gap-up": "#6aa6e8",
+  "Day trade": "#9b8de0", "Position": "#c98ec9", "Other": "#8a93a6",
+};
+
+const todayISO = () => new Date().toISOString().slice(0, 10);
+const fmtMoney = (n) => (n < 0 ? "-$" : "$") + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtPct = (n) => (n >= 0 ? "+" : "") + n.toFixed(2) + "%";
+
+function computePnL(t) {
+  const shares = parseFloat(t.shares) || 0;
+  const entry = parseFloat(t.entry) || 0;
+  const exit = parseFloat(t.exit) || 0;
+  const fees = parseFloat(t.fees) || 0;
+  const gross = (exit - entry) * shares;
+  const net = gross - fees;
+  const cost = entry * shares;
+  const pct = cost > 0 ? (net / cost) * 100 : 0;
+  return { gross, net, pct, cost };
+}
+
+function blankForm() {
+  return { symbol: "", date: todayISO(), shares: "", entry: "", exit: "", fees: "", type: "Scalp", notes: "" };
+}
+
+function App() {
+  const [trades, setTrades] = useState([]);
+  const [form, setForm] = useState(blankForm());
+  const [editingId, setEditingId] = useState(null);
+
+  useEffect(() => { setTrades(loadTrades()); }, []);
+
+  function persist(next) { setTrades(next); saveTrades(next); }
+
+  function handleSubmit() {
+    if (!form.symbol || !form.shares || !form.entry || !form.exit) return;
+    const clean = { ...form, symbol: form.symbol.toUpperCase().trim() };
+    if (editingId) {
+      persist(trades.map((t) => (t.id === editingId ? { ...clean, id: editingId } : t)));
+      setEditingId(null);
+    } else {
+      persist([{ ...clean, id: Date.now().toString() }, ...trades]);
+    }
+    setForm(blankForm());
+  }
+
+  function handleEdit(t) {
+    setForm({ ...t }); setEditingId(t.id);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+  function handleDelete(id) {
+    persist(trades.filter((t) => t.id !== id));
+    if (editingId === id) { setEditingId(null); setForm(blankForm()); }
+  }
+
+  function exportCSV() {
+    const rows = [["Symbol","Date","Type","Shares","Entry","Exit","Fees","NetPnL","Pct","Notes"]];
+    trades.forEach((t) => {
+      const p = computePnL(t);
+      rows.push([t.symbol, t.date, t.type, t.shares, t.entry, t.exit, t.fees || 0,
+        p.net.toFixed(2), p.pct.toFixed(2), (t.notes || "").replace(/"/g, '""')]);
+    });
+    const csv = rows.map((r) => r.map((c) => `"${c}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "tradebook.csv"; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  const totals = useMemo(() => {
+    let net = 0, wins = 0, losses = 0;
+    trades.forEach((t) => { const { net: n } = computePnL(t); net += n; if (n > 0) wins++; else if (n < 0) losses++; });
+    return { net, wins, losses, winRate: trades.length ? (wins / trades.length) * 100 : 0, count: trades.length };
+  }, [trades]);
+
+  const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+  const livePnL = computePnL(form);
+
+  return (
+    <div style={S.page}>
+      <header style={S.header}>
+        <div>
+          <div style={S.eyebrow}>POSITION LOG</div>
+          <h1 style={S.title}>Trade Book</h1>
+        </div>
+        <div style={{ textAlign: "right" }}>
+          <div style={S.headerStatLabel}>Net P&amp;L</div>
+          <div style={{ ...S.headerStatVal, color: totals.net >= 0 ? "#5ec8a8" : "#e8607d" }}>{fmtMoney(totals.net)}</div>
+        </div>
+      </header>
+
+      <div className="summary-grid" style={S.summary}>
+        <Stat label="Trades" value={totals.count} />
+        <Stat label="Wins" value={totals.wins} color="#5ec8a8" />
+        <Stat label="Losses" value={totals.losses} color="#e8607d" />
+        <Stat label="Win rate" value={totals.count ? totals.winRate.toFixed(0) + "%" : "—"} />
+      </div>
+
+      <div style={S.card}>
+        <div style={S.cardTitle}>{editingId ? "Edit trade" : "Log a trade"}</div>
+        <div style={S.row}>
+          <Field label="Symbol" flex={1.2}><input style={S.input} value={form.symbol} onChange={set("symbol")} placeholder="MGN" /></Field>
+          <Field label="Date" flex={1.4}><input style={S.input} type="date" value={form.date} onChange={set("date")} /></Field>
+          <Field label="Type" flex={1.6}>
+            <select style={S.input} value={form.type} onChange={set("type")}>
+              {TRADE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </Field>
+        </div>
+        <div style={S.row}>
+          <Field label="Shares"><input style={S.input} type="number" value={form.shares} onChange={set("shares")} placeholder="10000" /></Field>
+          <Field label="Entry price"><input style={S.input} type="number" step="0.0001" value={form.entry} onChange={set("entry")} placeholder="0.28" /></Field>
+          <Field label="Exit price"><input style={S.input} type="number" step="0.0001" value={form.exit} onChange={set("exit")} placeholder="0.30" /></Field>
+          <Field label="Fees"><input style={S.input} type="number" step="0.01" value={form.fees} onChange={set("fees")} placeholder="2.05" /></Field>
+        </div>
+        <Field label="Notes — setup, thesis, what you learned">
+          <textarea style={{ ...S.input, height: 64, resize: "vertical", fontFamily: "inherit" }} value={form.notes} onChange={set("notes")} placeholder="Gap-up momentum scalp, stepped aside before close." />
+        </Field>
+        {(form.entry && form.exit && form.shares) ? (
+          <div style={S.preview}>
+            <span style={S.previewLabel}>Projected</span>
+            <span style={{ color: livePnL.net >= 0 ? "#5ec8a8" : "#e8607d", fontWeight: 600 }}>{fmtMoney(livePnL.net)} <span style={{ opacity: 0.6, fontWeight: 400 }}>net</span></span>
+            <span style={{ color: livePnL.net >= 0 ? "#5ec8a8" : "#e8607d", opacity: 0.8 }}>{fmtPct(livePnL.pct)}</span>
+            <span style={{ opacity: 0.5, fontSize: 13 }}>cost {fmtMoney(livePnL.cost)}</span>
+          </div>
+        ) : null}
+        <div style={S.formActions}>
+          {editingId ? <button style={S.btnGhost} onClick={() => { setEditingId(null); setForm(blankForm()); }}>Cancel</button> : null}
+          <button style={S.btnPrimary} onClick={handleSubmit}>{editingId ? "Save changes" : "Add trade"}</button>
+        </div>
+      </div>
+
+      <div style={S.listHead}>
+        <span style={S.cardTitle}>History</span>
+        {trades.length ? <button style={S.exportBtn} onClick={exportCSV}>Export CSV</button> : null}
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {trades.length === 0 ? (
+          <div style={S.empty}>No trades yet. Log your first one above.</div>
+        ) : trades.map((t) => {
+          const p = computePnL(t); const up = p.net >= 0;
+          return (
+            <div key={t.id} style={S.tradeRow}>
+              <div style={{ width: 4, background: up ? "#5ec8a8" : "#e8607d", flexShrink: 0 }} />
+              <div style={S.tradeMain}>
+                <div style={S.tradeTopLine}>
+                  <span style={S.tradeSym}>{t.symbol}</span>
+                  <span style={S.typeTag(TYPE_COLOR[t.type] || "#8a93a6")}>{t.type}</span>
+                  <span style={S.tradeDate}>{t.date}</span>
+                </div>
+                <div style={S.tradeDetail}>{parseInt(t.shares).toLocaleString()} sh · {parseFloat(t.entry)} → {parseFloat(t.exit)}{parseFloat(t.fees) ? ` · ${fmtMoney(parseFloat(t.fees))} fees` : ""}</div>
+                {t.notes ? <div style={S.tradeNotes}>{t.notes}</div> : null}
+              </div>
+              <div style={S.tradeRight}>
+                <div style={{ fontSize: 17, fontWeight: 700, fontVariantNumeric: "tabular-nums", color: up ? "#5ec8a8" : "#e8607d" }}>{fmtMoney(p.net)}</div>
+                <div style={{ fontSize: 12.5, fontVariantNumeric: "tabular-nums", color: up ? "#5ec8a8" : "#e8607d" }}>{fmtPct(p.pct)}</div>
+                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                  <button style={S.miniBtn} onClick={() => handleEdit(t)}>Edit</button>
+                  <button style={{ ...S.miniBtn, color: "#e8607d" }} onClick={() => handleDelete(t.id)}>Delete</button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, children, flex = 1 }) {
+  return (
+    <label style={{ display: "flex", flexDirection: "column", gap: 6, flex, minWidth: 0 }}>
+      <span style={S.fieldLabel}>{label}</span>
+      {children}
+    </label>
+  );
+}
+function Stat({ label, value, color }) {
+  return (
+    <div style={S.statBox}>
+      <div style={{ fontSize: 22, fontWeight: 700, color: color || "#e7eaf0", fontVariantNumeric: "tabular-nums" }}>{value}</div>
+      <div style={S.statLabel}>{label}</div>
+    </div>
+  );
+}
+
+const S = {
+  page: { background: "#0d1018", minHeight: "100vh", color: "#e7eaf0", fontFamily: "'Inter', -apple-system, system-ui, sans-serif", padding: "28px 18px 60px", maxWidth: 720, margin: "0 auto" },
+  header: { display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 22 },
+  eyebrow: { fontSize: 11, letterSpacing: 2.5, color: "#5a6478", fontWeight: 600 },
+  title: { fontSize: 30, fontWeight: 700, margin: "4px 0 0", letterSpacing: -0.5 },
+  headerStatLabel: { fontSize: 11, letterSpacing: 1.5, color: "#5a6478", textTransform: "uppercase" },
+  headerStatVal: { fontSize: 24, fontWeight: 700, fontVariantNumeric: "tabular-nums" },
+  summary: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, marginBottom: 22 },
+  statBox: { background: "#141926", border: "1px solid #1f2738", borderRadius: 12, padding: "14px 12px", textAlign: "center" },
+  statLabel: { fontSize: 11, color: "#5a6478", marginTop: 3, letterSpacing: 0.5 },
+  card: { background: "#141926", border: "1px solid #1f2738", borderRadius: 16, padding: 18, marginBottom: 22 },
+  cardTitle: { fontSize: 13, fontWeight: 600, color: "#8a93a6", letterSpacing: 0.5, textTransform: "uppercase" },
+  row: { display: "flex", gap: 10, marginBottom: 12, flexWrap: "wrap" },
+  fieldLabel: { fontSize: 11.5, color: "#7a8499", letterSpacing: 0.3 },
+  input: { background: "#0d1018", border: "1px solid #283044", borderRadius: 9, padding: "10px 11px", color: "#e7eaf0", fontSize: 15, outline: "none", width: "100%" },
+  preview: { display: "flex", alignItems: "center", gap: 14, padding: "10px 12px", background: "#0d1018", border: "1px solid #283044", borderRadius: 9, marginTop: 4, fontVariantNumeric: "tabular-nums", flexWrap: "wrap" },
+  previewLabel: { fontSize: 11, letterSpacing: 1, color: "#5a6478", textTransform: "uppercase" },
+  formActions: { display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 14 },
+  btnPrimary: { background: "#2f6df0", color: "#fff", border: "none", borderRadius: 9, padding: "11px 20px", fontSize: 14, fontWeight: 600, cursor: "pointer" },
+  btnGhost: { background: "transparent", color: "#8a93a6", border: "1px solid #283044", borderRadius: 9, padding: "11px 20px", fontSize: 14, fontWeight: 500, cursor: "pointer" },
+  listHead: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 },
+  exportBtn: { background: "transparent", color: "#6aa6e8", border: "1px solid #283044", borderRadius: 8, padding: "6px 12px", fontSize: 12.5, cursor: "pointer", fontWeight: 500 },
+  empty: { textAlign: "center", color: "#5a6478", padding: "40px 0", fontSize: 14 },
+  tradeRow: { display: "flex", background: "#141926", border: "1px solid #1f2738", borderRadius: 14, overflow: "hidden" },
+  tradeMain: { padding: "13px 14px", flex: 1, minWidth: 0 },
+  tradeTopLine: { display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" },
+  tradeSym: { fontSize: 16, fontWeight: 700, letterSpacing: 0.3 },
+  typeTag: (c) => ({ fontSize: 11, fontWeight: 600, color: c, background: c + "1f", padding: "2px 8px", borderRadius: 20 }),
+  tradeDate: { fontSize: 12, color: "#5a6478", marginLeft: "auto" },
+  tradeDetail: { fontSize: 13, color: "#9aa3b5", marginTop: 6, fontVariantNumeric: "tabular-nums" },
+  tradeNotes: { fontSize: 12.5, color: "#737d92", marginTop: 7, lineHeight: 1.45, fontStyle: "italic" },
+  tradeRight: { padding: "13px 14px", textAlign: "right", display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "center", gap: 2, borderLeft: "1px solid #1f2738", minWidth: 110 },
+  miniBtn: { background: "transparent", border: "none", color: "#6a7488", fontSize: 12, cursor: "pointer", padding: 0 },
+};
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
